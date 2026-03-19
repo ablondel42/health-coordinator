@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "health-coordinator"
+version = "0.1.0"
+description = "Repository Health Coordinator natively orchestrating Qwen CLI subprocesses."
+readme = "HEALTH-COORDINATOR.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "sqlalchemy",
+    "typer",
+    "httpx"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio"
+]
+
+[project.scripts]
+hc = "app.cli:app"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
