@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localhost/schemas/task-record.schema.json",
+  "title": "Task Record",
+  "description": "Canonical task object owned by the coordinator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "sourceType", "domain", "title", "description", "priority", "approvalState", "executionState", "verificationState", "owner"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
+    "sourceType": { "type": "string", "enum": ["finding", "manual"] },
+    "findingId": { "type": ["string", "null"] },
+    "manualReason": { "type": ["string", "null"] },
+    "domain": { "type": "string" },
+    "title": { "type": "string", "maxLength": 160 },
+    "description": { "type": "string", "maxLength": 2000 },
+    "priority": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
+    "severity": { "type": ["string", "null"], "enum": ["critical", "high", "medium", "low", "info", null] },
+    "approvalState": { "type": "string", "enum": ["pending_review", "approved", "rejected", "ignored", "edited"] },
+    "executionState": { "type": "string", "enum": ["not_started", "ready", "in_progress", "done", "failed", "skipped", "cancelled"] },
+    "verificationState": { "type": "string", "enum": ["not_applicable", "pending", "passed", "failed", "partial", "unverifiable"] },
+    "owner": { "type": "string" },
+    "scopeNote": { "type": ["string", "null"] },
+    "tags": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localhost/schemas/subagent-fix-output.schema.json",
+  "title": "Subagent Fix Output",
+  "description": "Output contract for one Qwen fix subagent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domain", "agentName", "fixes"],
+  "properties": {
+    "domain": { "type": "string" },
+    "agentName": { "type": "string" },
+    "fixes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["taskId", "findingId", "status", "changedFiles", "testsRun", "patchSummary"],
+        "properties": {
+          "taskId": { "type": "string" },
+          "findingId": { "type": ["string", "null"] },
+          "status": { "type": "string", "enum": ["applied", "partial", "failed", "skipped"] },
+          "changedFiles": { "type": "array", "items": { "type": "string" } },
+          "testsRun": { "type": "array", "items": { "type": "string" } },
+          "patchSummary": { "type": "string" }
+        }
+      }
+    }
+  }
+}

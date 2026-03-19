@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localhost/schemas/approval-state.schema.json",
+  "title": "Approval State",
+  "description": "User review decisions recorded between audit and fix.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "status", "reviewedAt", "taskDecisions", "summary"],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "runId": { "type": "string" },
+    "status": { "type": "string", "enum": ["awaiting_user_approval", "review_complete"] },
+    "reviewedAt": { "type": ["string", "null"], "format": "date-time" },
+    "taskDecisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["taskId", "decision"],
+        "properties": {
+          "taskId": { "type": "string" },
+          "decision": { "type": "string", "enum": ["approved", "rejected", "ignored", "edited"] },
+          "note": { "type": ["string", "null"] },
+          "editedPriority": { "type": ["string", "null"], "enum": ["P0", "P1", "P2", "P3", null] },
+          "editedOwner": { "type": ["string", "null"] },
+          "editedScope": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approved", "rejected", "ignored", "edited"],
+      "properties": {
+        "approved": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "integer", "minimum": 0 },
+        "ignored": { "type": "integer", "minimum": 0 },
+        "edited": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
