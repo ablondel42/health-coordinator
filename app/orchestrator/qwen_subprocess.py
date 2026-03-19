@@ -19,6 +19,7 @@ async def spawn_and_execute_LLM_subprocess_for_audit(
     domain_identifier: str, 
     audit_rules_array: list[str], 
     target_output_schema_path: str,
+    workspace_path: str = None,
     hard_timeout_in_seconds: int = None
 ) -> Dict[str, Any]:
     """
@@ -44,26 +45,25 @@ async def spawn_and_execute_LLM_subprocess_for_audit(
     execution_session_uuid = str(uuid.uuid4())
     logger.info(f"Starting Qwen native subagent. Session UUID: {execution_session_uuid}, Domain: {domain_identifier}")
     
-    formatted_system_prompt_instruction = f"RULES: {json.dumps(audit_rules_array)}. Output JSON strictly matching the schema: {target_output_schema_path}"
-    
     subprocess_cli_command_arguments = [
-        "qwen", "--input-format", "stream-json", "--output-format", "stream-json",
-        "--session-id", execution_session_uuid, "--system-prompt", formatted_system_prompt_instruction
+        "qwen", "--input-format", "text", "--output-format", "text",
+        "--session-id", execution_session_uuid
     ]
     
-    # Instruction payload matching Qwen execution schema formatting
-    standardized_instruction_payload_dictionary = {"type": "content", "value": f"Run the {domain_identifier} audit. strictly Return schema-compliant JSON."}
+    # Instruction payload feeding directly natively into basic TEXT prompt injection natively.
+    merged_prompt_value = f"RULES: {json.dumps(audit_rules_array)}.\nOutput JSON strictly matching the schema: {target_output_schema_path}\n\nRun the {domain_identifier} audit. Strictly return a complete JSON payload matching the target output schema exactly WITHOUT any markdown formatting."
     
     try:
         active_llm_subprocess = await asyncio.create_subprocess_exec(
             *subprocess_cli_command_arguments,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            cwd=workspace_path
         )
         
-        # Sequentially drain standard input payloads downwards
-        utf8_encoded_payload_bytes = json.dumps(standardized_instruction_payload_dictionary).encode('utf-8') + b'\n'
+        # Sequentially drain standard input payloads natively mapping TEXT securely
+        utf8_encoded_payload_bytes = merged_prompt_value.encode('utf-8') + b'\n'
         active_llm_subprocess.stdin.write(utf8_encoded_payload_bytes)
         await active_llm_subprocess.stdin.drain()
         active_llm_subprocess.stdin.close() # Throw EOF to inform CLI input block is sealed.
@@ -87,7 +87,23 @@ async def spawn_and_execute_LLM_subprocess_for_audit(
             logger.error(f"Qwen subprocess ({domain_identifier}) exited with code {active_llm_subprocess.returncode}. Stderr trace: {stderr_cleaned_error_string}")
             raise RuntimeError(f"Subagent execution crashed context safely with status {active_llm_subprocess.returncode}. Session tracking {execution_session_uuid}.")
 
-        extrapolated_json_payload_dictionary = json.loads(merged_raw_stdout_string)
+        # Clean markdown code blocks natively if LLM wraps output
+        cleaned_json_string = merged_raw_stdout_string.strip()
+        if cleaned_json_string.startswith("```json"):
+            cleaned_json_string = cleaned_json_string[7:]
+        if cleaned_json_string.startswith("```"):
+            cleaned_json_string = cleaned_json_string[3:]
+        if cleaned_json_string.endswith("```"):
+            cleaned_json_string = cleaned_json_string[:-3]
+        cleaned_json_string = cleaned_json_string.strip()
+        
+        # Guard rails for conversational LLM wrapper text boundaries gracefully natively mapping strictly
+        first_valid_brace = cleaned_json_string.find('{')
+        last_valid_brace = cleaned_json_string.rfind('}')
+        if first_valid_brace != -1 and last_valid_brace != -1:
+            cleaned_json_string = cleaned_json_string[first_valid_brace:last_valid_brace+1]
+
+        extrapolated_json_payload_dictionary = json.loads(cleaned_json_string)
         logger.info(f"Successfully received valid strict JSON payload returning from LLM {domain_identifier} subagent pipeline.")
         return extrapolated_json_payload_dictionary
         
