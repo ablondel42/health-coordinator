@@ -54,3 +54,23 @@ def load_agent_contract_by_domain(domain_string: str) -> Dict[str, Any]:
         raise RuntimeError(f"Could not read agent-registry bounds for {domain_string}") from general_read_error
 
     raise FileNotFoundError(f"No contract found in registry for domain '{domain_string}'.")
+
+def list_all_registered_domains() -> list[str]:
+    """Finds all valid .contract.json paths and dynamically extracts their native domain binds."""
+    core_registry_directory_path = fetch_agent_registry_directory_path()
+    resolved_domains_list = []
+    
+    try:
+        found_target_files = os.listdir(core_registry_directory_path)
+        for valid_filename in found_target_files:
+            if valid_filename.endswith(".contract.json"):
+                absolute_file_path = os.path.join(core_registry_directory_path, valid_filename)
+                with open(absolute_file_path, "r", encoding="utf-8") as file_handle:
+                    extracted_contract_json = json.load(file_handle)
+                    domain_extracted = extracted_contract_json.get("domain")
+                    if domain_extracted:
+                        resolved_domains_list.append(domain_extracted)
+    except Exception as generic_read_error:
+        logger.error("Failed mapping complete agent-registry array list limits dynamically bounds natively cleanly mappings natively.", exc_info=generic_read_error)
+        
+    return resolved_domains_list
