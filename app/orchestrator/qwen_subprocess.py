@@ -45,28 +45,25 @@ async def spawn_and_execute_LLM_subprocess_for_audit(
     execution_session_uuid = str(uuid.uuid4())
     logger.info(f"Starting Qwen native subagent. Session UUID: {execution_session_uuid}, Domain: {domain_identifier}")
     
-    subprocess_cli_command_arguments = [
-        "qwen", "--input-format", "text", "--output-format", "text",
-        "--session-id", execution_session_uuid
-    ]
-    
     # Instruction payload feeding directly natively into basic TEXT prompt injection natively.
     merged_prompt_value = f"RULES: {json.dumps(audit_rules_array)}.\nOutput JSON strictly matching the schema: {target_output_schema_path}\n\nRun the {domain_identifier} audit. Strictly return a complete JSON payload matching the target output schema exactly WITHOUT any markdown formatting."
     
+    subprocess_cli_command_arguments = [
+        "qwen", "-p", merged_prompt_value,
+        "--input-format", "text", "--output-format", "text",
+        "--session-id", execution_session_uuid
+    ]
+    
     try:
+        print("subprocess_cli_command_arguments:", subprocess_cli_command_arguments)
         active_llm_subprocess = await asyncio.create_subprocess_exec(
             *subprocess_cli_command_arguments,
-            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_path
         )
         
-        # Sequentially drain standard input payloads natively mapping TEXT securely
-        utf8_encoded_payload_bytes = merged_prompt_value.encode('utf-8') + b'\n'
-        active_llm_subprocess.stdin.write(utf8_encoded_payload_bytes)
-        await active_llm_subprocess.stdin.drain()
-        active_llm_subprocess.stdin.close() # Throw EOF to inform CLI input block is sealed.
+        # No longer using stdin pipe as we pass the prompt via -p argument.
         
         async def safely_read_entire_stdout_stream_into_memory() -> str:
             collected_output_buffer_chunks = []
