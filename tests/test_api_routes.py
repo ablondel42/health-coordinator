@@ -1,53 +1,60 @@
 """
-Strict tests confirming FastAPI routes reject illegal schemas and process correctly.
+Tests for FastAPI routes.
+
+Verifies schema validation and HTTP response handling.
 """
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from app.main import app
-from app.database import Base, application_database_engine, fetch_transactional_database_session
+from app.database import Base, engine, get_db_session
 
-established_test_client_layer = TestClient(app)
+client = TestClient(app)
 
-# Scaffold an empty SQLite in-memory DB exactly strictly ensuring API HTTP assertions avoid dirty data maps
-StructurallyMockedDatabaseMarker = sessionmaker(autocommit=False, autoflush=False, bind=application_database_engine)
+TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def retrieve_test_db_override_fixture_dynamically():
+
+def override_get_db_session():
+    db = TestSession()
     try:
-        isolated_active_db_context = StructurallyMockedDatabaseMarker()
-        yield isolated_active_db_context
+        yield db
     finally:
-        isolated_active_db_context.close()
+        db.close()
 
-app.dependency_overrides[fetch_transactional_database_session] = retrieve_test_db_override_fixture_dynamically
+
+app.dependency_overrides[get_db_session] = override_get_db_session
+
 
 @pytest.fixture(autouse=True)
-def setup_teardown_sqlite_memory_state():
-    """Initializes tables purely securely natively before each logic chunk dynamically ensuring isolated logic context strictly."""
-    Base.metadata.create_all(bind=application_database_engine)
+def setup_db():
+    """Create tables before each test, drop after."""
+    Base.metadata.create_all(bind=engine)
     yield
-    Base.metadata.drop_all(bind=application_database_engine)
+    Base.metadata.drop_all(bind=engine)
 
-def test_fetch_global_health_endpoint_success() -> None:
-    """Proves HTTP base application framework initializes safely properly gracefully resolving dependencies native structures exactly cleanly."""
-    api_endpoint_response = established_test_client_layer.get("/health")
-    assert api_endpoint_response.status_code == 200
-    assert api_endpoint_response.json()["status"] == "ok"
 
-def test_manual_task_creation_endpoint_rejects_hallucinations_errors() -> None:
-    """Proves strict Pydantic execution layer inherently inherently safely natively guarantees inherently throwing 422 HTTP structural rejections dropping LLM injection."""
-    corrupted_hallucinated_schema_payload = {
+def test_health_endpoint():
+    """Verify the health endpoint returns OK."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_create_task_rejects_invalid_schema():
+    """Verify Pydantic rejects unknown fields with 422."""
+    invalid_payload = {
         "id": "TASK-100",
-        "hallucinated_variable_ghost_parameter": True, # This violates JSON definitions schema rigidly natively explicitly dynamically!
-        "title": "Broken Schema Structural Context Bounds Validation Trigger Layer"
+        "hallucinated_field": True,
+        "title": "Invalid Task"
     }
-    
-    validation_reused_api_endpoint_response = established_test_client_layer.post("/tasks", json=corrupted_hallucinated_schema_payload)
-    assert validation_reused_api_endpoint_response.status_code == 422 # Standard validation rigidly expected organically structurally
 
-def test_start_new_project_audit_swarm_fires_mock() -> None:
-    """Verify LLM Swarm execution hooks spin safely routing natively logically context natively structures boundaries."""
-    routing_post_execution_system_response = established_test_client_layer.post("/runs")
-    assert routing_post_execution_system_response.status_code == 200
-    assert "runId" in routing_post_execution_system_response.json()
+    response = client.post("/tasks", json=invalid_payload)
+    assert response.status_code == 422
+
+
+def test_start_audit_swarm():
+    """Verify the audit swarm endpoint returns a run ID."""
+    response = client.post("/runs")
+    assert response.status_code == 200
+    assert "runId" in response.json()

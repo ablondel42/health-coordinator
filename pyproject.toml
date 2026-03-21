@@ -14,13 +14,17 @@ dependencies = [
     "pydantic",
     "sqlalchemy",
     "typer",
-    "httpx"
+    "httpx",
+    "rich>=13.0"
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-asyncio"
+]
+logging = [
+    "python-json-logger>=3.0"
 ]
 
 [project.scripts]

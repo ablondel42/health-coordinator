@@ -1,37 +1,39 @@
 """
-Tests to ensure Pydantic boundaries refuse invalid JSON schemas.
+Tests Pydantic schema validation.
+
+Verifies that invalid JSON schemas are rejected.
 """
 import pytest
 from pydantic import ValidationError
+
 from app.models import SubagentAuditOutput
 
-def test_subagent_output_rejects_hallucinated_properties() -> None:
-    """
-    Prove that Pydantic enforces additionalProperties: false.
-    If an LLM hallucinates extra fields, it should crash the ingestion step.
-    """
-    corrupt_llm_payload = {
+
+def test_model_rejects_extra_fields():
+    """Verify Pydantic enforces additionalProperties: false."""
+    invalid_payload = {
         "domain": "documentation",
         "agentName": "Docs Auditor",
         "score": 100,
         "findings": [],
-        "hallucinated_extra_field": "LLM garbage"
+        "extra_field": "should be rejected"
     }
-    
-    with pytest.raises(ValidationError) as validation_exception_info:
-        SubagentAuditOutput.model_validate(corrupt_llm_payload)
-        
-    assert "hallucinated_extra_field" in str(validation_exception_info.value), "Strict model incorrectly allowed extra fields."
 
-def test_subagent_output_accepts_perfect_schema() -> None:
-    """
-    Verify standard pass case for validation bounds.
-    """
-    valid_llm_payload = {
+    with pytest.raises(ValidationError) as exc_info:
+        SubagentAuditOutput.model_validate(invalid_payload)
+
+    assert "extra_field" in str(exc_info.value)
+
+
+def test_model_accepts_valid_payload():
+    """Verify valid payloads pass validation."""
+    valid_payload = {
         "domain": "documentation",
         "agentName": "Docs Auditor",
         "score": 100,
         "findings": []
     }
-    validated_schema_model = SubagentAuditOutput.model_validate(valid_llm_payload)
-    assert validated_schema_model.domain == "documentation"
+
+    result = SubagentAuditOutput.model_validate(valid_payload)
+    assert result.domain == "documentation"
+    assert result.score == 100

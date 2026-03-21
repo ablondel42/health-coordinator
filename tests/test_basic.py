@@ -1,3 +1,6 @@
-def test_environment_boots():
-    """Ensure the test runner executes without crashing on module boundaries."""
+"""Basic sanity tests."""
+
+
+def test_environment_ready():
+    """Verify the test environment is working."""
     assert True

@@ -1,11 +1,9 @@
 """
-Global Command Line Interface (CLI) application tool bounds for `hc`.
+Command Line Interface (CLI) for the Health Coordinator.
 
-Uses `Typer` to expose `hc server start`, `hc tasks list`, and `hc audit`.
+Uses Typer to expose commands: `hc server start`, `hc tasks list`, `hc audit`.
 """
 import typer
-import subprocess
-import uvicorn
 import asyncio
 from sqlalchemy.orm import Session
 from rich.console import Console
@@ -13,258 +11,310 @@ from rich.table import Table
 from rich.json import JSON
 
 from app.config import settings
-from app.database import ThreadSafeDatabaseSession, Base, application_database_engine
-from app.models import DBTaskRecord, SubagentAuditOutput
-from app.orchestrator.registry import load_agent_contract_by_domain, list_all_registered_domains
-from app.orchestrator.qwen_subprocess import spawn_and_execute_LLM_subprocess_for_audit
-from app.logger import setup_global_logger
+from app.database import SessionLocal, Base, engine
+from app.models import DBTaskRecord, SubagentAuditOutput, TaskRecord
+from app.orchestrator.registry import load_contract, list_domains
+from app.orchestrator.qwen_subprocess import run_subagent_audit
+from app.logger import setup_global_logger, get_logger
 
-# Initialize strict format logging enabling native output standard execution layer terminal printing bounds
 setup_global_logger()
+logger = get_logger(__name__)
+Base.metadata.create_all(bind=engine)
 
-# Initialize SQLite schemas natively securely directly bridging limits gracefully independently
-Base.metadata.create_all(bind=application_database_engine)
-
-global_cli_application = typer.Typer(
-    help="Health Coordinator Swarm CLI Tool natively executing LLMs.",
-    add_completion=False
+app = typer.Typer(
+    help="Health Coordinator CLI - orchestrates Qwen subagents for repository audits."
 )
-terminal_console_tracer = Console()
+console = Console()
 
-@global_cli_application.command("server")
-def boot_fastapi_server_instance_cleanly(port: int = 8000, host: str = "127.0.0.1"):
-    """Boot the native local web server mapping gracefully loading Uvicorn environments."""
-    terminal_console_tracer.print(f"[bold green]Starting Uvicorn Server Environment Native Bindings -> {host}:{port}...[/]")
+
+@app.command("server")
+def start_server(port: int = 8000, host: str = "127.0.0.1") -> None:
+    """Start the FastAPI server."""
+    console.print(f"[bold green]Starting server at {host}:{port}...[/]")
+    import uvicorn
+    logger.info(f"Starting server at {host}:{port}")
     uvicorn.run("app.main:app", host=host, port=port, reload=True)
 
-@global_cli_application.command("tasks")
-def display_cli_tasks_table_memory(
-    domain: str = typer.Option(None, "--domain", help="Filter strictly tightly to single execution loop domain bounds natively."),
-    state: str = typer.Option(None, "--state", help="Filter tightly cleanly explicitly mapped strictly sequentially dynamically natively limits bindings.")
-):
-    """Prints SQLite memory projection structured bounds natively mapped CLI Rich tables format reliably parsing explicitly strictly safely cleanly."""
-    in_process_db_session: Session = ThreadSafeDatabaseSession()
-    
-    database_query_builder = in_process_db_session.query(DBTaskRecord)
-    if domain:
-        database_query_builder = database_query_builder.filter_by(domain=domain)
-    if state:
-        database_query_builder = database_query_builder.filter_by(executionState=state)
-        
-    database_records_scanned_array = database_query_builder.all()
-    
-    # Intercept and order dynamically from most critical natively structurally limits safely
-    severity_weight_map = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-    database_records_scanned_array.sort(key=lambda mapped_db_record: severity_weight_map.get(str(mapped_db_record.raw_payload.get("severity", "info")).lower(), 99))
-    
-    rendered_rich_terminal_table = Table(title="Health Coordinator Task Log")
-    rendered_rich_terminal_table.add_column("ID", style="cyan")
-    rendered_rich_terminal_table.add_column("Domain")
-    rendered_rich_terminal_table.add_column("Location", style="magenta")
-    rendered_rich_terminal_table.add_column("Details", overflow="ellipsis", no_wrap=True)
-    rendered_rich_terminal_table.add_column("Severity")
-    rendered_rich_terminal_table.add_column("Status", style="blue")
-    
-    for single_record_payload_entry in database_records_scanned_array:
-        payload_dict = single_record_payload_entry.raw_payload
-        tags_array = payload_dict.get("tags", [])
-        
-        # Fall back to domain bounds securely if affectedFiles is omitted natively mapping inherently safely
-        extracted_folder_file_mapping = tags_array[0] if tags_array else payload_dict.get("domain", single_record_payload_entry.domain)
-        
-        raw_detail_title_cleaned = str(payload_dict.get("title", single_record_payload_entry.title)).replace('\n', ' ').strip()
-        
-        extracted_raw_severity_value = str(payload_dict.get("severity", "info")).lower()
-        if extracted_raw_severity_value == "critical":
-            extracted_severity_value = f"[bold red blink]{extracted_raw_severity_value}[/]"
-        elif extracted_raw_severity_value == "high":
-            extracted_severity_value = f"[red]{extracted_raw_severity_value}[/]"
-        elif extracted_raw_severity_value == "medium":
-            extracted_severity_value = f"[orange3]{extracted_raw_severity_value}[/]"
-        elif extracted_raw_severity_value == "low":
-            extracted_severity_value = f"[yellow]{extracted_raw_severity_value}[/]"
-        else:
-            extracted_severity_value = f"[cyan]{extracted_raw_severity_value}[/]"
-        
-        extracted_status_value = str(payload_dict.get("approvalState", single_record_payload_entry.approvalState))
-        
-        rendered_rich_terminal_table.add_row(
-            str(single_record_payload_entry.id),
-            str(single_record_payload_entry.domain),
-            str(extracted_folder_file_mapping),
-            raw_detail_title_cleaned,
-            extracted_severity_value,
-            extracted_status_value
-        )
-        
-    terminal_console_tracer.print(rendered_rich_terminal_table)
-    in_process_db_session.close()
 
-@global_cli_application.command("audit")
-def summon_orchestrator_swarm_manually_commandline(
-    workspace: str = typer.Argument(".", help="Target repository path to audit (defaults to current directory)."),
-    domain: str = typer.Option(None, "--domain", help="Target exactly one strict execution domain boundary context natively.")
-):
-    """Runs a targeted execution pipeline manually dropping LLM bound contexts synchronously cleanly strictly mappings natively loop injections."""
-    path_msg = f" against workspace '{workspace}'"
-    
-    domains_to_run = [domain] if domain else list_all_registered_domains()
-    
-    if not domains_to_run:
-        terminal_console_tracer.print("[red]No Subagent contracts found securely internally mapped![/]")
-        raise typer.Exit(code=1)
-
-    terminal_console_tracer.print(f"[bold purple]Spawning fully parallelized Swarm natively processing {len(domains_to_run)} independent Agent Domains concurrently{path_msg}...[/]")
-
-    async def execute_all_subagents_concurrently_blocking_natively():
-        execution_task_coroutines = []
-        for target_domain_string in domains_to_run:
-            contract_dict = load_agent_contract_by_domain(target_domain_string)
-            execution_task_coroutines.append(
-                spawn_and_execute_LLM_subprocess_for_audit(
-                    domain_identifier=target_domain_string,
-                    audit_rules_array=contract_dict.get("auditRules", []),
-                    target_output_schema_path=contract_dict.get("outputSchema", ""),
-                    workspace_path=workspace
-                )
-            )
-        
-        # Deploy actual OS level OS threading mappings via asyncio non blocking pipeline
-        return await asyncio.gather(*execution_task_coroutines, return_exceptions=True)
+@app.command("tasks")
+def list_tasks(
+    domain: str = typer.Option(None, "--domain", help="Filter by domain"),
+    state: str = typer.Option(None, "--state", help="Filter by execution state")
+) -> None:
+    """Display tasks from the database in a table format."""
+    db_session: Session = SessionLocal()
 
     try:
-        with terminal_console_tracer.status(f"[bold cyan]Swarm dynamically processing {len(domains_to_run)} Agent contexts simultaneously natively gracefully... This may take up to {settings.subagent_execution_timeout_sek}s.[/]"):
-            completed_results_array = asyncio.run(execute_all_subagents_concurrently_blocking_natively())
-            
-        import random
-        from app.models import TaskRecord
-        sqlite_insertion_session: Session = ThreadSafeDatabaseSession()
-        generated_tasks_count = 0
+        query = db_session.query(DBTaskRecord)
+        if domain:
+            query = query.filter_by(domain=domain)
+        if state:
+            query = query.filter_by(executionState=state)
 
-        # Calculate explicitly native structurally sequential UID loops safely smoothly
-        highest_record_bound = sqlite_insertion_session.query(DBTaskRecord).order_by(DBTaskRecord.id.desc()).first()
-        if highest_record_bound and highest_record_bound.id.startswith("TASK-"):
+        records = query.all()
+        logger.info(f"Retrieved {len(records)} tasks from database")
+
+        # Sort by severity (critical first)
+        severity_weight = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        records.sort(key=lambda r: severity_weight.get(str(r.raw_payload.get("severity", "info")).lower(), 99))
+
+        table = Table(title="Health Coordinator Tasks")
+        table.add_column("ID", style="cyan")
+        table.add_column("Domain")
+        table.add_column("Location", style="magenta")
+        table.add_column("Details", overflow="ellipsis", no_wrap=True)
+        table.add_column("Severity")
+        table.add_column("Status", style="blue")
+
+        for record in records:
+            payload = record.raw_payload
+            tags = payload.get("tags", [])
+            location = tags[0] if tags else payload.get("domain", record.domain)
+            title = str(payload.get("title", record.title)).replace('\n', ' ').strip()
+
+            severity = str(payload.get("severity", "info")).lower()
+            severity_styles = {
+                "critical": "[bold red blink]critical[/]",
+                "high": "[red]high[/]",
+                "medium": "[orange3]medium[/]",
+                "low": "[yellow]low[/]",
+                "info": "[cyan]info[/]"
+            }
+            styled_severity = severity_styles.get(severity, f"[cyan]{severity}[/]")
+
+            status = str(payload.get("approvalState", record.approvalState))
+
+            table.add_row(
+                str(record.id),
+                str(record.domain),
+                str(location),
+                title,
+                styled_severity,
+                status
+            )
+
+        console.print(table)
+    except Exception as e:
+        logger.error(f"Failed to list tasks: {e}", exc_info=e)
+        console.print(f"[bold red]Error retrieving tasks:[/] {e}")
+        raise typer.Exit(code=1)
+    finally:
+        db_session.close()
+
+
+@app.command("audit")
+def run_audit(
+    workspace: str = typer.Argument(".", help="Repository path to audit"),
+    domain: str = typer.Option(None, "--domain", help="Audit specific domain only")
+) -> None:
+    """Run an audit using Qwen subagents."""
+    domains = [domain] if domain else list_domains()
+
+    if not domains:
+        logger.error("No subagent contracts found in agent-registry/")
+        console.print("[red]No subagent contracts found in agent-registry/[/]")
+        raise typer.Exit(code=1)
+
+    logger.info(f"Starting audit on domains: {domains}")
+    console.print(f"[bold purple]Running audit on {len(domains)} domain(s) against workspace '{workspace}'...[/]")
+
+    async def run_all_subagents():
+        tasks = []
+        for target_domain in domains:
+            contract = load_contract(target_domain)
+            tasks.append(
+                run_subagent_audit(
+                    domain=target_domain,
+                    rules=contract.get("auditRules", []),
+                    schema_path=contract.get("outputSchema", ""),
+                    workspace=workspace
+                )
+            )
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    db_session: Session = None
+    try:
+        with console.status(f"[bold cyan]Running audit... (timeout: {settings.subagent_execution_timeout_sec}s)[/]"):
+            results = asyncio.run(run_all_subagents())
+
+        db_session = SessionLocal()
+        task_count = 0
+
+        # Get next task ID
+        last_record = db_session.query(DBTaskRecord).order_by(DBTaskRecord.id.desc()).first()
+        next_id = 0
+        if last_record and last_record.id.startswith("TASK-"):
             try:
-                native_max_indexed_id_bounds = int(highest_record_bound.id.split("-")[1])
+                next_id = int(last_record.id.split("-")[1])
             except ValueError:
-                native_max_indexed_id_bounds = 0
-        else:
-            native_max_indexed_id_bounds = 0
+                logger.warning(f"Invalid task ID format: {last_record.id}")
+                next_id = 0
 
-        for mapping_result_payload in completed_results_array:
-            if isinstance(mapping_result_payload, Exception):
-                terminal_console_tracer.print(f"[bold red]One explicitly bound Subagent pipeline crashed cleanly structurally:[/] {str(mapping_result_payload)}")
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Subagent failed: {result}", exc_info=result)
+                console.print(f"[bold red]Subagent failed:[/] {result}")
                 continue
-                
-            validated_pydantic_model = SubagentAuditOutput(**mapping_result_payload)
-            for loop_index, explicit_finding in enumerate(validated_pydantic_model.findings):
-                native_max_indexed_id_bounds += 1
-                generated_dynamic_task_uid = f"TASK-{native_max_indexed_id_bounds:05d}"
-                new_task_record_pydantic = TaskRecord(
-                    id=generated_dynamic_task_uid,
+
+            try:
+                audit_output = SubagentAuditOutput(**result)
+            except Exception as validation_error:
+                logger.error(f"Invalid subagent output: {validation_error}", exc_info=validation_error)
+                console.print(f"[bold red]Invalid subagent output:[/] {validation_error}")
+                continue
+
+            for index, finding in enumerate(audit_output.findings):
+                next_id += 1
+                task_id = f"TASK-{next_id:05d}"
+
+                task = TaskRecord(
+                    id=task_id,
                     sourceType="finding",
-                    findingId=str(loop_index),
-                    domain=validated_pydantic_model.domain,
-                    title=explicit_finding.title,
-                    description=explicit_finding.description,
-                    priority=explicit_finding.priority,
-                    severity=explicit_finding.severity,
+                    findingId=str(index),
+                    domain=audit_output.domain,
+                    title=finding.title,
+                    description=finding.description,
+                    priority=finding.priority,
+                    severity=finding.severity,
                     approvalState="pending_review",
                     executionState="not_started",
                     verificationState="pending",
-                    owner=validated_pydantic_model.agentName,
-                    tags=explicit_finding.affectedFiles
+                    owner=audit_output.agentName,
+                    tags=finding.affectedFiles
                 )
-                
-                db_orm_record = DBTaskRecord(
-                    id=new_task_record_pydantic.id,
-                    sourceType=new_task_record_pydantic.sourceType,
-                    domain=new_task_record_pydantic.domain,
-                    title=new_task_record_pydantic.title,
-                    priority=new_task_record_pydantic.priority,
-                    approvalState=new_task_record_pydantic.approvalState,
-                    executionState=new_task_record_pydantic.executionState,
-                    owner=new_task_record_pydantic.owner,
-                    raw_payload=new_task_record_pydantic.model_dump()
+
+                db_record = DBTaskRecord(
+                    id=task.id,
+                    sourceType=task.sourceType,
+                    domain=task.domain,
+                    title=task.title,
+                    priority=task.priority,
+                    approvalState=task.approvalState,
+                    executionState=task.executionState,
+                    owner=task.owner,
+                    raw_payload=task.model_dump()
                 )
-                sqlite_insertion_session.add(db_orm_record)
-                generated_tasks_count += 1
-                
-        sqlite_insertion_session.commit()
-        sqlite_insertion_session.close()
-        
-        terminal_console_tracer.print(f"[bold yellow]\nNatively extracted and bound {generated_tasks_count} aggregated concurrently generated Subagent Findings firmly into SQLite! Run `hc tasks`![/]\n")
-        
-    except Exception as llm_execution_error:
-        terminal_console_tracer.print(f"\n[bold red]Orchestrator Pipeline Crash cleanly structurally mapped bounds:[/] {str(llm_execution_error)}")
-        raise typer.Exit(code=1)
+                db_session.add(db_record)
+                task_count += 1
 
-@global_cli_application.command("task")
-def view_single_task_payload_dynamically_single(task_id: str = typer.Argument(..., help="Exact ID bound to the target Task strictly naturally mapped bounds.")):
-    """Fetch and deeply inspect the explicitly natively full JSON schemas strictly securely cleanly safely dynamically stored loop limits within bounds gracefully."""
-    db_session: Session = ThreadSafeDatabaseSession()
-    database_record_resolved_block = db_session.query(DBTaskRecord).filter_by(id=task_id).first()
-    
-    if not database_record_resolved_block:
-        terminal_console_tracer.print(f"[bold red]Task ID '{task_id}' unmapped securely cleanly properly dynamically smoothly inside explicitly natively internal limit bounds.[/]")
-        raise typer.Exit(code=1)
-        
-    terminal_console_tracer.print(f"\n[bold green]Inspecting Task Payload: {database_record_resolved_block.id} (Priority: {database_record_resolved_block.priority})[/]\n")
-    terminal_console_tracer.print(JSON.from_data(database_record_resolved_block.raw_payload))
-    db_session.close()
+        db_session.commit()
+        logger.info(f"Successfully saved {task_count} tasks to database")
+        console.print(f"[bold green]\nFound {task_count} issues. Run `hc tasks` to view.[/]\n")
 
-@global_cli_application.command("approve")
-def unblock_task_approval_gate_cli_hook(task_id: str = typer.Argument(..., help="Task ID cleanly inherently to strictly securely unblock gracefully natively limits injections constraints maps.")):
-    """Unblocks human-in-the-loop dependencies structures directly native execution loop schemas strictly mapping pipelines properly securely safely."""
-    db_session: Session = ThreadSafeDatabaseSession()
-    target_database_model_isolated = db_session.query(DBTaskRecord).filter_by(id=task_id).first()
-    
-    if not target_database_model_isolated:
-        terminal_console_tracer.print(f"[bold red]Task limits schema contexts internally unmapped bounds explicitly rigidly stably cleanly smoothly securely mappings pipelines gracefully constraints logs bounds.[/]")
+    except Exception as e:
+        if db_session:
+            db_session.rollback()
+        logger.error(f"Audit failed: {e}", exc_info=e)
+        console.print(f"[bold red]Audit failed:[/] {e}")
         raise typer.Exit(code=1)
-        
-    extracted_database_dictionary = target_database_model_isolated.raw_payload
-    extracted_database_dictionary["approvalState"] = "approved"
-    
-    target_database_model_isolated.raw_payload = extracted_database_dictionary
-    target_database_model_isolated.approvalState = "approved"
-    
-    db_session.commit()
-    terminal_console_tracer.print(f"[bold green]Task {task_id} successfully updated formally `approved` strictly securely mapped bounding limits correctly constraints cleanly gracefully internally securely smoothly cleanly properly natively dynamically mapping limits safely schemas loops.[/]")
-    db_session.close()
+    finally:
+        if db_session:
+            db_session.close()
 
-@global_cli_application.command("ignore")
-def suppress_task_from_workspace_cli_permanently(task_id: str = typer.Argument(..., help="Task mappings properly rigidly smoothly strictly constraints loop mappings safely.")):
-    """Marks task as ignored blocking dynamically explicitly natively gracefully properly securely loops pipelines execution entirely rigidly limits stably."""
-    db_session: Session = ThreadSafeDatabaseSession()
-    target_database_model_isolated = db_session.query(DBTaskRecord).filter_by(id=task_id).first()
-    
-    if not target_database_model_isolated:
-        terminal_console_tracer.print(f"[bold red]Task dynamically properly rigidly stably limits structurally constraints logs context securely bounds mapping firmly schemas hooks gracefully bounds securely logs definitions loops mappings schemas unmapped limits bindings loops securely loops pipelines.[/]")
+
+@app.command("task")
+def view_task(task_id: str = typer.Argument(..., help="Task ID to view")) -> None:
+    """Display full JSON payload for a single task."""
+    db_session: Session = SessionLocal()
+
+    try:
+        record = db_session.query(DBTaskRecord).filter_by(id=task_id).first()
+
+        if not record:
+            logger.warning(f"Task not found: {task_id}")
+            console.print(f"[bold red]Task '{task_id}' not found.[/]")
+            raise typer.Exit(code=1)
+
+        logger.info(f"Viewing task: {task_id}")
+        console.print(f"\n[bold green]Task {record.id} (Priority: {record.priority})[/]\n")
+        console.print(JSON.from_data(record.raw_payload))
+    except typer.Exit:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to view task {task_id}: {e}", exc_info=e)
+        console.print(f"[bold red]Error:[/] {e}")
         raise typer.Exit(code=1)
-        
-    extracted_database_dictionary = target_database_model_isolated.raw_payload
-    extracted_database_dictionary["approvalState"] = "ignored"
-    
-    target_database_model_isolated.raw_payload = extracted_database_dictionary
-    target_database_model_isolated.approvalState = "ignored"
-    
-    db_session.commit()
-    terminal_console_tracer.print(f"[bold yellow]Task {task_id} safely mapped constraints completely properly bounds firmly rigidly structurally limits strictly structurally explicitly statically securely manually permanently definitions internally loops smoothly limits securely logically properly limits internally structurally bounds constraints ignored firmly stable structurally stably constraints firmly securely explicitly smoothly manually smoothly maps safely cleanly formally firmly safely.[/]")
-    db_session.close()
+    finally:
+        db_session.close()
 
-@global_cli_application.command("reset")
-def completely_nuke_database_records_cli(
-    force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation natively strictly mapped securely cleanly.")
-):
-    """Wipes all TaskRecords structurally from the SQLite bindings securely natively mapping testing pipelines securely properly gracefully bounds solidly mapping limits dynamically stably."""
+
+@app.command("approve")
+def approve_task(task_id: str = typer.Argument(..., help="Task ID to approve")) -> None:
+    """Approve a task for the fix phase."""
+    db_session: Session = SessionLocal()
+
+    try:
+        record = db_session.query(DBTaskRecord).filter_by(id=task_id).first()
+
+        if not record:
+            logger.warning(f"Task not found for approval: {task_id}")
+            console.print(f"[bold red]Task '{task_id}' not found.[/]")
+            raise typer.Exit(code=1)
+
+        payload = record.raw_payload
+        payload["approvalState"] = "approved"
+        record.raw_payload = payload
+        record.approvalState = "approved"
+
+        db_session.commit()
+        logger.info(f"Task {task_id} approved")
+        console.print(f"[bold green]Task {task_id} approved.[/]")
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Failed to approve task {task_id}: {e}", exc_info=e)
+        console.print(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(code=1)
+    finally:
+        db_session.close()
+
+
+@app.command("ignore")
+def ignore_task(task_id: str = typer.Argument(..., help="Task ID to ignore")) -> None:
+    """Mark a task as ignored (will not be fixed)."""
+    db_session: Session = SessionLocal()
+
+    try:
+        record = db_session.query(DBTaskRecord).filter_by(id=task_id).first()
+
+        if not record:
+            logger.warning(f"Task not found for ignore: {task_id}")
+            console.print(f"[bold red]Task '{task_id}' not found.[/]")
+            raise typer.Exit(code=1)
+
+        payload = record.raw_payload
+        payload["approvalState"] = "ignored"
+        record.raw_payload = payload
+        record.approvalState = "ignored"
+
+        db_session.commit()
+        logger.info(f"Task {task_id} ignored")
+        console.print(f"[bold yellow]Task {task_id} ignored.[/]")
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Failed to ignore task {task_id}: {e}", exc_info=e)
+        console.print(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(code=1)
+    finally:
+        db_session.close()
+
+
+@app.command("reset")
+def reset_database(force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation")) -> None:
+    """Delete all tasks from the database."""
     if not force:
-        typer.confirm("Are you absolutely sure you want to nuke all Task Records from the database natively?", abort=True)
-        
-    db_session: Session = ThreadSafeDatabaseSession()
-    deleted_count = db_session.query(DBTaskRecord).delete()
-    db_session.commit()
-    terminal_console_tracer.print(f"[bold red]Successfully completely wiped {deleted_count} Tasks securely strictly bounding safely internally completely structurally.[/]")
-    db_session.close()
+        typer.confirm("Delete all tasks from the database?", abort=True)
 
-app = global_cli_application
+    db_session: Session = SessionLocal()
+
+    try:
+        count = db_session.query(DBTaskRecord).delete()
+        db_session.commit()
+        logger.info(f"Deleted {count} tasks from database")
+        console.print(f"[bold red]Deleted {count} tasks.[/]")
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Failed to reset database: {e}", exc_info=e)
+        console.print(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(code=1)
+    finally:
+        db_session.close()

@@ -1,25 +1,30 @@
 """
-Pydantic schemas enforcing strict 1:1 mapping with the canonical JSON schemas.
+Pydantic models and SQLAlchemy ORM.
 
-All models dictate `extra = 'forbid'` to align with json schema `additionalProperties: false`.
-SQLAlchemy ORM models map strictly to these definitions.
+Enforces strict schema validation with `extra='forbid'`.
 """
 from typing import List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import Column, String, JSON
+
+from app.database import Base
+
 
 class StrictBaseModel(BaseModel):
-    """Base Pydantic model enforcing that no unknown fields are accepted."""
+    """Base model that rejects unknown fields."""
     model_config = ConfigDict(extra='forbid')
 
-# -- Pydantic Models --
 
 class EvidenceItem(StrictBaseModel):
+    """Evidence for a finding."""
     type: Literal["file", "command", "test", "config", "log"]
     path: str
     line: Optional[int] = None
     snippet: str
 
+
 class Finding(StrictBaseModel):
+    """An audit finding (issue)."""
     title: str
     description: str
     severity: Literal["critical", "high", "medium", "low", "info"]
@@ -29,13 +34,17 @@ class Finding(StrictBaseModel):
     suggestedFix: str
     autoFixable: bool
 
+
 class SubagentAuditOutput(StrictBaseModel):
+    """Output from an audit subagent."""
     domain: str
     agentName: str
     score: int = Field(ge=0, le=100)
     findings: List[Finding]
 
+
 class FixItem(StrictBaseModel):
+    """A fix applied by a subagent."""
     taskId: str
     findingId: Optional[str] = None
     status: Literal["applied", "partial", "failed", "skipped"]
@@ -43,12 +52,16 @@ class FixItem(StrictBaseModel):
     testsRun: List[str]
     patchSummary: str
 
+
 class SubagentFixOutput(StrictBaseModel):
+    """Output from a fix subagent."""
     domain: str
     agentName: str
     fixes: List[FixItem]
 
+
 class TaskRecord(StrictBaseModel):
+    """A task record."""
     id: str = Field(pattern=r"^TASK-[0-9]{4,}$")
     sourceType: Literal["finding", "manual"]
     findingId: Optional[str] = None
@@ -65,15 +78,12 @@ class TaskRecord(StrictBaseModel):
     scopeNote: Optional[str] = None
     tags: List[str]
 
-# -- SQLAlchemy ORM Models --
-
-from sqlalchemy import Column, String, JSON
-from app.database import Base
 
 class DBTaskRecord(Base):
+    """SQLAlchemy model for task storage."""
     __tablename__ = "tasks"
-    
-    id = Column(String, primary_key=True, index=True) # E.g. TASK-1234
+
+    id = Column(String, primary_key=True, index=True)
     sourceType = Column(String, nullable=False)
     domain = Column(String, nullable=False, index=True)
     title = Column(String, nullable=False)
@@ -81,6 +91,4 @@ class DBTaskRecord(Base):
     approvalState = Column(String, nullable=False)
     executionState = Column(String, nullable=False)
     owner = Column(String, nullable=False)
-    
-    # Store complex nested JSON blob safely
     raw_payload = Column(JSON, nullable=False)

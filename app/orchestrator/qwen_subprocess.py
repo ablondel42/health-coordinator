@@ -1,118 +1,160 @@
 """
 Qwen Subprocess Orchestrator
 
-The highest risk module in the application. Spawns, pipes, monitors, and cleanly 
-terminates external LLM subagents using `asyncio`.
-Enforces strict timeouts to prevent system hanging or zombie processes.
+Spawns and manages Qwen CLI subprocesses using asyncio.
+Enforces timeouts and captures output safely.
 """
 import asyncio
 import json
 import uuid
 import logging
+import os
+from pathlib import Path
 from typing import Dict, Any
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-async def spawn_and_execute_LLM_subprocess_for_audit(
-    domain_identifier: str, 
-    audit_rules_array: list[str], 
-    target_output_schema_path: str,
-    workspace_path: str = None,
-    hard_timeout_in_seconds: int = None
-) -> Dict[str, Any]:
+
+def validate_workspace_path(workspace: str) -> str:
     """
-    Spawns a Qwen CLI subprocess safely bridging the host context to the native LLM process.
+    Validate and resolve workspace path to prevent path traversal.
     
     Args:
-        domain_identifier (str): The domain scope string (e.g. 'documentation').
-        audit_rules_array (list): Array of rigid string roles passed as system prompts.
-        target_output_schema_path (str): Exact JSON schema path bound string for strict Output validation.
-        hard_timeout_in_seconds (int): Hard termination limit in seconds.
-        
+        workspace: User-provided workspace path.
+    
     Returns:
-        Dict[str, Any]: The fully parsed and schema-compliant JSON output from the subagent.
-        
+        Resolved absolute path.
+    
     Raises:
-        TimeoutError: If the subagent hangs beyond the specified boundary.
-        ValueError: If the streaming output cannot be parsed strictly into JSON.
-        RuntimeError: If the subprocess exits with an error code (1) or crashes.
+        ValueError: If path is invalid or attempts traversal outside allowed scope.
     """
-    if hard_timeout_in_seconds is None:
-        hard_timeout_in_seconds = settings.subagent_execution_timeout_sek
-        
-    execution_session_uuid = str(uuid.uuid4())
-    logger.info(f"Starting Qwen native subagent. Session UUID: {execution_session_uuid}, Domain: {domain_identifier}")
+    # Resolve to absolute path
+    resolved = Path(workspace).resolve()
     
-    # Instruction payload feeding directly natively into basic TEXT prompt injection natively.
-    merged_prompt_value = f"RULES: {json.dumps(audit_rules_array)}.\nOutput JSON strictly matching the schema: {target_output_schema_path}\n\nRun the {domain_identifier} audit. Strictly return a complete JSON payload matching the target output schema exactly WITHOUT any markdown formatting."
+    # Check if path exists
+    if not resolved.exists():
+        raise ValueError(f"Workspace path does not exist: {workspace}")
     
-    subprocess_cli_command_arguments = [
-        "qwen", "-p", merged_prompt_value,
-        "--input-format", "text", "--output-format", "text",
-        "--session-id", execution_session_uuid
+    # Check if path is a directory
+    if not resolved.is_dir():
+        raise ValueError(f"Workspace path is not a directory: {workspace}")
+    
+    # Check if path is readable
+    if not os.access(resolved, os.R_OK):
+        raise ValueError(f"Workspace path is not readable: {workspace}")
+    
+    return str(resolved)
+
+
+async def run_subagent_audit(
+    domain: str,
+    rules: list[str],
+    schema_path: str,
+    workspace: str = None,
+    timeout: int = None
+) -> Dict[str, Any]:
+    """
+    Run a Qwen CLI subprocess to perform an audit.
+
+    Args:
+        domain: The audit domain (e.g., 'documentation').
+        rules: List of audit rules to pass as system prompt.
+        schema_path: Path to the expected output JSON schema.
+        workspace: Working directory for the subprocess.
+        timeout: Maximum execution time in seconds.
+
+    Returns:
+        Parsed JSON output from the subagent.
+
+    Raises:
+        TimeoutError: If the subprocess exceeds the timeout.
+        ValueError: If the output is not valid JSON or workspace is invalid.
+        RuntimeError: If the subprocess exits with an error code.
+    """
+    if timeout is None:
+        timeout = settings.subagent_execution_timeout_sec
+
+    session_id = str(uuid.uuid4())
+    logger.info(f"Starting subagent: session={session_id}, domain={domain}")
+
+    prompt = (
+        f"RULES: {json.dumps(rules)}.\n"
+        f"Output JSON strictly matching the schema: {schema_path}\n\n"
+        f"Run the {domain} audit. Return only valid JSON matching the schema, no markdown."
+    )
+
+    cmd = [
+        "qwen", "-p", prompt,
+        "--input-format", "text",
+        "--output-format", "text",
+        "--session-id", session_id
     ]
-    
+
+    # Validate and resolve workspace path
+    cwd = None
+    if workspace:
+        try:
+            cwd = validate_workspace_path(workspace)
+            logger.debug(f"Resolved workspace path: {cwd}")
+        except ValueError as e:
+            logger.error(f"Invalid workspace path '{workspace}': {e}")
+            raise
+
     try:
-        print("subprocess_cli_command_arguments:", subprocess_cli_command_arguments)
-        active_llm_subprocess = await asyncio.create_subprocess_exec(
-            *subprocess_cli_command_arguments,
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=workspace_path
+            cwd=cwd
         )
-        
-        # No longer using stdin pipe as we pass the prompt via -p argument.
-        
-        async def safely_read_entire_stdout_stream_into_memory() -> str:
-            collected_output_buffer_chunks = []
-            async for data_line_bytes in active_llm_subprocess.stdout:
-                collected_output_buffer_chunks.append(data_line_bytes.decode('utf-8').strip())
-            return "".join(collected_output_buffer_chunks)
-            
-        # Hard race condition: We await both the standard output and the process termination.
-        # If this exceeds timeout limits, asyncio fires TimeoutError securely.
-        merged_raw_stdout_string, ignored_wait_payload = await asyncio.wait_for(
-            asyncio.gather(safely_read_entire_stdout_stream_into_memory(), active_llm_subprocess.wait()), 
-            timeout=hard_timeout_in_seconds
+
+        async def read_stdout() -> str:
+            chunks = []
+            async for line in process.stdout:
+                chunks.append(line.decode('utf-8').strip())
+            return "".join(chunks)
+
+        stdout, _ = await asyncio.wait_for(
+            asyncio.gather(read_stdout(), process.wait()),
+            timeout=timeout
         )
-        
-        if active_llm_subprocess.returncode != 0:
-            stderr_captured_error_bytes = await active_llm_subprocess.stderr.read()
-            stderr_cleaned_error_string = stderr_captured_error_bytes.decode('utf-8', errors='replace').strip()
-            logger.error(f"Qwen subprocess ({domain_identifier}) exited with code {active_llm_subprocess.returncode}. Stderr trace: {stderr_cleaned_error_string}")
-            raise RuntimeError(f"Subagent execution crashed context safely with status {active_llm_subprocess.returncode}. Session tracking {execution_session_uuid}.")
 
-        # Clean markdown code blocks natively if LLM wraps output
-        cleaned_json_string = merged_raw_stdout_string.strip()
-        if cleaned_json_string.startswith("```json"):
-            cleaned_json_string = cleaned_json_string[7:]
-        if cleaned_json_string.startswith("```"):
-            cleaned_json_string = cleaned_json_string[3:]
-        if cleaned_json_string.endswith("```"):
-            cleaned_json_string = cleaned_json_string[:-3]
-        cleaned_json_string = cleaned_json_string.strip()
-        
-        # Guard rails for conversational LLM wrapper text boundaries gracefully natively mapping strictly
-        first_valid_brace = cleaned_json_string.find('{')
-        last_valid_brace = cleaned_json_string.rfind('}')
-        if first_valid_brace != -1 and last_valid_brace != -1:
-            cleaned_json_string = cleaned_json_string[first_valid_brace:last_valid_brace+1]
+        if process.returncode != 0:
+            stderr = await process.stderr.read()
+            stderr_text = stderr.decode('utf-8', errors='replace').strip()
+            logger.error(f"Subprocess exited with code {process.returncode}: {stderr_text}")
+            raise RuntimeError(f"Subagent failed with exit code {process.returncode}")
 
-        extrapolated_json_payload_dictionary = json.loads(cleaned_json_string)
-        logger.info(f"Successfully received valid strict JSON payload returning from LLM {domain_identifier} subagent pipeline.")
-        return extrapolated_json_payload_dictionary
-        
-    except asyncio.TimeoutError as wrapped_timeout_exception:
-        # Crucial Zombie Process defense boundary
+        # Strip markdown code blocks if present
+        json_text = stdout.strip()
+        if json_text.startswith("```json"):
+            json_text = json_text[7:]
+        if json_text.startswith("```"):
+            json_text = json_text[3:]
+        if json_text.endswith("```"):
+            json_text = json_text[:-3]
+        json_text = json_text.strip()
+
+        # Extract JSON object from text (handle conversational wrapper)
+        start = json_text.find('{')
+        end = json_text.rfind('}')
+        if start != -1 and end != -1:
+            json_text = json_text[start:end + 1]
+
+        result = json.loads(json_text)
+        logger.info(f"Subagent completed: domain={domain}")
+        return result
+
+    except asyncio.TimeoutError:
         try:
-            active_llm_subprocess.kill()
-        except OSError:
-            pass # Already dead
-        logger.error(f"LLM Subagent '{domain_identifier}' severely timed out after {hard_timeout_in_seconds} seconds bounds. Terminated OS PID {active_llm_subprocess.pid} force kill.")
-        raise TimeoutError(f"Subagent for {domain_identifier} completely exceeded limits {hard_timeout_in_seconds}s limit bounds.") from wrapped_timeout_exception
-        
-    except json.JSONDecodeError as wrapped_json_decode_exception:
-        logger.error(f"Failed decoding LLM {domain_identifier} stdout chunk payloads. Raw data payload: {merged_raw_stdout_string}", exc_info=wrapped_json_decode_exception)
-        raise ValueError(f"Subagent returned corrupted broken JSON structure payloads causing {wrapped_json_decode_exception}.") from wrapped_json_decode_exception
+            process.kill()
+        except OSError as e:
+            logger.warning(f"Failed to kill subprocess (PID {process.pid}): {e}")
+        logger.error(f"Subagent timed out after {timeout}s (PID: {process.pid})")
+        raise TimeoutError(f"Subagent timed out after {timeout}s") from None
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON from subagent: {stdout}")
+        raise ValueError(f"Subagent returned invalid JSON: {e}") from e

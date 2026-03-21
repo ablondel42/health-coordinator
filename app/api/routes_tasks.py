@@ -1,69 +1,111 @@
 """
-API routes for explicit Task CRUD operations.
+Task CRUD API routes.
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
-from app.database import fetch_transactional_database_session
+from app.database import get_db_session
 from app.models import DBTaskRecord, TaskRecord
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
-# Detailed REST Endpoints logic as mapped in spec...
+
 @router.post("", response_model=TaskRecord)
-def manual_task_creation_endpoint(payload: TaskRecord, db: Session = Depends(fetch_transactional_database_session)):
-    """Manually creates a new Task record mapped centrally."""
-    existing_record = db.query(DBTaskRecord).filter_by(id=payload.id).first()
-    if existing_record:
-        raise HTTPException(status_code=400, detail="Task ID perfectly collides. Already mapped bounds.")
-        
-    db_record = DBTaskRecord(
-        id=payload.id,
-        sourceType=payload.sourceType,
-        domain=payload.domain,
-        title=payload.title,
-        priority=payload.priority,
-        approvalState=payload.approvalState,
-        executionState=payload.executionState,
-        owner=payload.owner,
-        raw_payload=payload.model_dump()
-    )
-    db.add(db_record)
-    db.commit()
-    db.refresh(db_record)
-    return db_record.raw_payload
+def create_task(payload: TaskRecord, db: Session = Depends(get_db_session)) -> dict:
+    """Create a new task."""
+    try:
+        existing = db.query(DBTaskRecord).filter_by(id=payload.id).first()
+        if existing:
+            logger.warning(f"Task creation failed - ID already exists: {payload.id}")
+            raise HTTPException(status_code=400, detail="Task ID already exists.")
+
+        db_record = DBTaskRecord(
+            id=payload.id,
+            sourceType=payload.sourceType,
+            domain=payload.domain,
+            title=payload.title,
+            priority=payload.priority,
+            approvalState=payload.approvalState,
+            executionState=payload.executionState,
+            owner=payload.owner,
+            raw_payload=payload.model_dump()
+        )
+        db.add(db_record)
+        db.commit()
+        db.refresh(db_record)
+        logger.info(f"Task created: {payload.id}, domain={payload.domain}, priority={payload.priority}")
+        return db_record.raw_payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to create task {payload.id}: {e}", exc_info=e)
+        raise HTTPException(status_code=500, detail="Failed to create task.")
+
 
 @router.get("", response_model=List[TaskRecord])
-def poll_tasks_list_filtered(
+def list_tasks(
     domain: Optional[str] = Query(None),
     state: Optional[str] = Query(None),
-    db: Session = Depends(fetch_transactional_database_session)
-):
-    """Provides filtered global polling for the Task database block securely via SQLite mapping."""
-    compiled_database_query = db.query(DBTaskRecord)
-    if domain:
-        compiled_database_query = compiled_database_query.filter_by(domain=domain)
-    if state:
-        compiled_database_query = compiled_database_query.filter_by(executionState=state)
-        
-    extracted_database_records = compiled_database_query.all()
-    return [mapped_record_dictionary.raw_payload for mapped_record_dictionary in extracted_database_records]
+    db: Session = Depends(get_db_session)
+) -> List[dict]:
+    """List tasks with optional domain and state filters."""
+    try:
+        query = db.query(DBTaskRecord)
+        filters = []
+        if domain:
+            query = query.filter_by(domain=domain)
+            filters.append(f"domain={domain}")
+        if state:
+            query = query.filter_by(executionState=state)
+            filters.append(f"state={state}")
+
+        records = query.all()
+        logger.info(f"Listed {len(records)} tasks with filters: {filters}")
+        return [record.raw_payload for record in records]
+    except Exception as e:
+        logger.error(f"Failed to list tasks: {e}", exc_info=e)
+        raise HTTPException(status_code=500, detail="Failed to list tasks.")
+
 
 @router.get("/{taskId}", response_model=TaskRecord)
-def fetch_task_payload_dynamically_single(taskId: str, db: Session = Depends(fetch_transactional_database_session)):
-    """Fetch exact metadata block cleanly exposing raw JSON dictionaries mapping strictly."""
-    locked_active_database_record = db.query(DBTaskRecord).filter_by(id=taskId).first()
-    if not locked_active_database_record:
-        raise HTTPException(status_code=404, detail="Requested Task ID bounds not cleanly mapped globally.")
-    return locked_active_database_record.raw_payload
+def get_task(taskId: str, db: Session = Depends(get_db_session)) -> dict:
+    """Get a single task by ID."""
+    try:
+        record = db.query(DBTaskRecord).filter_by(id=taskId).first()
+        if not record:
+            logger.warning(f"Task not found: {taskId}")
+            raise HTTPException(status_code=404, detail="Task not found.")
+        
+        logger.info(f"Retrieved task: {taskId}")
+        return record.raw_payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get task {taskId}: {e}", exc_info=e)
+        raise HTTPException(status_code=500, detail="Failed to get task.")
+
 
 @router.delete("/{taskId}")
-def destroy_task_record_securely_globally(taskId: str, db: Session = Depends(fetch_transactional_database_session)):
-    """Wipes the database mapping natively ensuring atomic rollbacks prevent leaks cleanly."""
-    locked_active_database_record = db.query(DBTaskRecord).filter_by(id=taskId).first()
-    if not locked_active_database_record:
-        raise HTTPException(status_code=404, detail="Task bounds unmapped.")
-    db.delete(locked_active_database_record)
-    db.commit()
-    return {"status": "destroyed", "taskId": taskId}
+def delete_task(taskId: str, db: Session = Depends(get_db_session)) -> dict:
+    """Delete a task."""
+    try:
+        record = db.query(DBTaskRecord).filter_by(id=taskId).first()
+        if not record:
+            logger.warning(f"Task not found for deletion: {taskId}")
+            raise HTTPException(status_code=404, detail="Task not found.")
+
+        db.delete(record)
+        db.commit()
+        logger.info(f"Task deleted: {taskId}")
+        return {"status": "deleted", "taskId": taskId}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to delete task {taskId}: {e}", exc_info=e)
+        raise HTTPException(status_code=500, detail="Failed to delete task.")

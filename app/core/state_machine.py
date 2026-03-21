@@ -1,68 +1,68 @@
 """
-Core State Machine
+Task State Machine
 
-Enforces strict lifecycles for Tasks to ensure the Audit -> Review -> Fix -> Verify 
-pipeline is perfectly respected.
+Enforces valid state transitions for the task lifecycle:
+Audit -> Review -> Fix -> Verify
 """
 import logging
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
-# Valid state transitions
-_VALID_EXECUTION_TRANSITIONS: Dict[str, List[str]] = {
-    # (Current_State) -> List of allowed Target_States
+# Valid execution state transitions
+VALID_TRANSITIONS: Dict[str, List[str]] = {
     "not_started": ["ready", "cancelled"],
     "ready": ["in_progress", "skipped", "cancelled"],
     "in_progress": ["done", "failed"],
-    "done": [], # Terminal
-    "failed": ["ready"], # Retry
-    "skipped": ["ready"], # Un-skip
-    "cancelled": ["not_started"] # Re-open
+    "done": [],  # Terminal state
+    "failed": ["ready"],  # Allow retry
+    "skipped": ["ready"],  # Allow un-skip
+    "cancelled": ["not_started"],  # Allow re-open
 }
 
-def verify_execution_transition_legality(current_state_string: str, next_state_string: str) -> bool:
+
+def is_valid_transition(current_state: str, next_state: str) -> bool:
     """
-    Determines if an execution state change is structurally valid.
-    
+    Check if a state transition is valid.
+
     Args:
-        current_state_string (str): Current executionState.
-        next_state_string (str): Desired executionState.
-        
+        current_state: The current execution state.
+        next_state: The desired next state.
+
     Returns:
-        bool: True if allowed strictly.
+        True if the transition is allowed.
     """
-    safely_allowed_transitions = _VALID_EXECUTION_TRANSITIONS.get(current_state_string, [])
-    if next_state_string in safely_allowed_transitions:
+    allowed = VALID_TRANSITIONS.get(current_state, [])
+    if next_state in allowed:
         return True
-    
-    # Self-transitions are safely ignored
-    if current_state_string == next_state_string:
-        return True
-        
-    logger.warning(f"Illegal execution state transition attempted: {current_state_string} -> {next_state_string}")
+    if current_state == next_state:
+        return True  # Self-transition is a no-op
+
+    logger.warning(f"Invalid state transition: {current_state} -> {next_state}")
     return False
 
-def progress_task_execution_state_securely(task_dictionary_payload: dict, next_state_string: str) -> dict:
+
+def update_task_state(payload: dict, next_state: str) -> dict:
     """
-    Mutates a task payload executionState after verifying it securely against the State Machine logic.
-    
+    Update a task's execution state after validating the transition.
+
     Args:
-        task_dictionary_payload (dict): The raw task record payload.
-        next_state_string (str): The strictly demanded new state.
-        
+        payload: The task record payload.
+        next_state: The new state to set.
+
     Returns:
-        dict: The locally updated payload.
-        
+        The updated payload.
+
     Raises:
-        ValueError: If the State Machine rejects the state transition.
+        ValueError: If the transition is not allowed.
     """
-    current_payload_state = task_dictionary_payload.get("executionState", "not_started")
-    
-    if not verify_execution_transition_legality(current_payload_state, next_state_string):
-        formatted_error_message = f"Task {task_dictionary_payload.get('id', 'UNKNOWN')} cannot transition executionState from '{current_payload_state}' to '{next_state_string}'."
-        logger.error(formatted_error_message)
-        raise ValueError(formatted_error_message)
-        
-    task_dictionary_payload["executionState"] = next_state_string
-    return task_dictionary_payload
+    current_state = payload.get("executionState", "not_started")
+
+    if not is_valid_transition(current_state, next_state):
+        task_id = payload.get("id", "UNKNOWN")
+        error_msg = f"Task {task_id}: cannot transition from '{current_state}' to '{next_state}'."
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    payload["executionState"] = next_state
+    return payload

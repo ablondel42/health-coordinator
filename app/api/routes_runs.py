@@ -1,21 +1,20 @@
 """
-API routes for kicking off subagent execute streams.
+Swarm execution control API routes.
 """
 from fastapi import APIRouter
 import uuid
 
 router = APIRouter(prefix="/runs", tags=["Swarm Controls"])
 
+
 @router.post("")
-async def start_new_project_audit_swarm_mapping():
-    """
-    Kicks off an async orchestration of the registered Qwen CLI subagents natively.
-    """
-    active_execution_session_uuid = str(uuid.uuid4())
-    # In full lifecycle integration, this fires asyncio orchestration logic.
-    return {"message": "Swarm successfully booted mapping pipelines reliably.", "runId": active_execution_session_uuid}
+async def start_audit_swarm() -> dict:
+    """Start a new audit swarm execution."""
+    run_id = str(uuid.uuid4())
+    return {"message": "Audit swarm started.", "runId": run_id}
+
 
 @router.get("/active")
-def poll_active_execution_threads_swarms():
-    """Fetch status for explicitly running `qwen` stream instances dynamically bounds context."""
+def get_active_swarm_status() -> dict:
+    """Get status of active subagent executions."""
     return {"activeSubagents": 0, "status": "idle"}

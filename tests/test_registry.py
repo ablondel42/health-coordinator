@@ -1,35 +1,40 @@
 """
-Tests the contract loading logic and bounding limits of the Agent Registry.
+Tests for the agent registry loader.
+
+Verifies contract loading and caching behavior.
 """
 import pytest
 from unittest import mock
-from app.orchestrator.registry import load_agent_contract_by_domain, _CONTRACT_CACHE
+
+from app.orchestrator.registry import load_contract, _contract_cache
+
 
 @pytest.fixture(autouse=True)
-def wipe_contract_cache():
-    """Ensure tests run cleanly with a zeroed-out memory state before each execution."""
-    _CONTRACT_CACHE.clear()
+def clear_cache():
+    """Clear the contract cache before each test."""
+    _contract_cache.clear()
     yield
 
-def test_registry_raises_filenotfound_on_bogus_domain() -> None:
-    """Ensure strict error bounds are followed if domain contract is missing."""
-    with pytest.raises(FileNotFoundError) as error_payload:
-        load_agent_contract_by_domain("bogus_domain_that_does_not_exist")
-    assert "No contract found" in str(error_payload.value)
+
+def test_load_contract_raises_on_missing_domain():
+    """Verify FileNotFoundError for unknown domains."""
+    with pytest.raises(FileNotFoundError) as exc_info:
+        load_contract("nonexistent_domain")
+    assert "No contract found" in str(exc_info.value)
+
 
 @mock.patch("os.listdir")
-@mock.patch("builtins.open", new_callable=mock.mock_open, read_data='{"domain": "test_domain", "auditRules": []}')
-def test_registry_successfully_caches_contract(mock_file_layer, mock_listdir_layer) -> None:
-    """Verify registry caches files properly so IO is skipped successfully on next loop."""
-    mock_listdir_layer.return_value = ["test-agent.contract.json"]
-    
-    first_load_result = load_agent_contract_by_domain("test_domain")
-    assert first_load_result["domain"] == "test_domain"
-    assert mock_file_layer.call_count == 1
-    
-    # Second call should bypass IO completely and hit the RAM cache.
-    second_load_result = load_agent_contract_by_domain("test_domain")
-    assert second_load_result["domain"] == "test_domain"
-    
-    # Prove that the memory hit worked! Still exactly 1.
-    assert mock_file_layer.call_count == 1
+@mock.patch("builtins.open", new_callable=mock.mock_open, read_data='{"domain": "test", "auditRules": []}')
+def test_load_contract_caches_result(mock_open, mock_listdir):
+    """Verify contracts are cached to avoid repeated disk I/O."""
+    mock_listdir.return_value = ["test.contract.json"]
+
+    # First call loads from disk
+    result = load_contract("test")
+    assert result["domain"] == "test"
+    assert mock_open.call_count == 1
+
+    # Second call uses cache
+    result = load_contract("test")
+    assert result["domain"] == "test"
+    assert mock_open.call_count == 1  # Still 1, cache hit
